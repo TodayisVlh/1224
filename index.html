@@ -1,0 +1,771 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dreamy Xmas</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+    <style>
+      body { margin: 0; overflow: hidden; background-color: #050103; font-family: 'Inter', sans-serif; }
+      h1, h2, h3, .serif { font-family: 'Playfair Display', serif; }
+      #root { width: 100vw; height: 100vh; }
+      canvas { touch-action: none; }
+    </style>
+    <script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@18.3.1",
+    "react/": "https://esm.sh/react@18.3.1/",
+    "react-dom": "https://esm.sh/react-dom@18.3.1",
+    "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
+    "three": "https://esm.sh/three@0.160.0",
+    "@react-three/fiber": "https://esm.sh/@react-three/fiber@8.15.16?external=react,react-dom,three",
+    "@react-three/drei": "https://esm.sh/@react-three/drei@9.99.0?external=react,react-dom,three,@react-three/fiber",
+    "@react-three/postprocessing": "https://esm.sh/@react-three/postprocessing@2.16.0?external=react,three,@react-three/fiber",
+    "postprocessing": "https://esm.sh/postprocessing@6.34.1?external=three",
+    "@mediapipe/tasks-vision": "https://esm.sh/@mediapipe/tasks-vision@0.10.9",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/"
+  }
+}
+</script>
+  <link rel="stylesheet" href="/index.css">
+</head>
+  <body>
+    <div id="root"></div>
+
+    <script type="text/babel" data-presets="react,typescript" data-type="module">
+      import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+      import ReactDOM from 'react-dom/client';
+      import { Canvas, useFrame } from '@react-three/fiber';
+      import { Environment, ContactShadows, OrbitControls } from '@react-three/drei';
+      import { EffectComposer, Bloom, Vignette } from '@react-three/postprocessing';
+      import { FilesetResolver, HandLandmarker } from "@mediapipe/tasks-vision";
+      import { InstancedMesh, Object3D, MathUtils, Vector3, Shape, Color } from 'three';
+      import * as THREE from 'three';
+
+      // ----------------------------------------------------------------------
+      // TYPES
+      // ----------------------------------------------------------------------
+      
+      // Use const objects instead of enums to avoid ReferenceErrors in Babel standalone
+      const AppState = {
+        INTRO: 'INTRO',
+        EXPERIENCE: 'EXPERIENCE'
+      };
+
+      const TreeMode = {
+        TREE: 'TREE',
+        EXPLODE: 'EXPLODE'
+      };
+
+      // ----------------------------------------------------------------------
+      // CONSTANTS
+      // ----------------------------------------------------------------------
+
+      const THEMES = {
+        PINK: {
+          name: 'PINK',
+          light: new Color('#FFB7C5'),
+          main: new Color('#FF69B4'),
+          accent: new Color('#E0B0FF'),
+          glow: '#FF69B4'
+        },
+        GREEN: {
+          name: 'GREEN',
+          light: new Color('#98FB98'), 
+          main: new Color('#2E8B57'), 
+          accent: new Color('#F0E68C'), 
+          glow: '#32CD32'
+        },
+        RED: {
+          name: 'RED',
+          light: new Color('#FFA07A'), 
+          main: new Color('#DC143C'), 
+          accent: new Color('#FFD700'), 
+          glow: '#FF0000'
+        },
+        BLUE: {
+          name: 'BLUE',
+          light: new Color('#87CEFA'), 
+          main: new Color('#4169E1'), 
+          accent: new Color('#E0FFFF'), 
+          glow: '#00BFFF'
+        },
+        PURPLE: {
+          name: 'PURPLE',
+          light: new Color('#D8BFD8'), 
+          main: new Color('#9400D3'), 
+          accent: new Color('#00FFFF'), 
+          glow: '#8A2BE2'
+        }
+      };
+
+      // Common Colors
+      const COLORS = {
+        bg: '#050103',
+        white: new Color('#FFFFFF'),
+        gem: new Color('#F0F8FF'),
+      };
+
+      // Counts
+      const LEAF_COUNT = 5000;
+      const GEM_COUNT = 1500;
+      const RIBBON_COUNT = 800;
+
+      // Audio - Jingle Bells (Kevin MacLeod) - Creative Commons
+      const BG_MUSIC_URL = "https://upload.wikimedia.org/wikipedia/commons/e/e9/Jingle_Bells_-_Kevin_MacLeod.mp3";
+
+      // ----------------------------------------------------------------------
+      // GESTURE SERVICE
+      // ----------------------------------------------------------------------
+
+      let handLandmarker = undefined;
+      const runningMode = "VIDEO";
+
+      const initializeHandLandmarker = async () => {
+        const vision = await FilesetResolver.forVisionTasks(
+          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.9/wasm"
+        );
+        
+        handLandmarker = await HandLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
+            delegate: "GPU"
+          },
+          runningMode: runningMode,
+          numHands: 1
+        });
+        
+        return handLandmarker;
+      };
+
+      const detectHands = (video, timestamp) => {
+        if (!handLandmarker) return null;
+        // Ensure video has dimensions to avoid errors
+        if (video.videoWidth === 0 || video.videoHeight === 0) return null;
+        try {
+          return handLandmarker.detectForVideo(video, timestamp);
+        } catch (e) {
+          console.warn("Detection error:", e);
+          return null;
+        }
+      };
+
+      const calculateGesture = (landmarks) => {
+        if (!landmarks || landmarks.length === 0) return null;
+
+        const hand = landmarks[0]; 
+        const wrist = hand[0];
+
+        const dist = (p1, p2) => Math.hypot(p1.x - p2.x, p1.y - p2.y);
+
+        let curledFingers = 0;
+        
+        // Index
+        if (dist(hand[8], wrist) < dist(hand[5], wrist)) curledFingers++;
+        // Middle
+        if (dist(hand[12], wrist) < dist(hand[9], wrist)) curledFingers++;
+        // Ring
+        if (dist(hand[16], wrist) < dist(hand[13], wrist)) curledFingers++;
+        // Pinky
+        if (dist(hand[20], wrist) < dist(hand[17], wrist)) curledFingers++;
+
+        const isFist = curledFingers >= 3; 
+        const isOpen = curledFingers <= 1;
+
+        return {
+          isFist,
+          isOpen,
+          x: hand[9].x, 
+          y: hand[9].y
+        };
+      };
+
+      // ----------------------------------------------------------------------
+      // COMPONENT: DREAM TREE
+      // ----------------------------------------------------------------------
+
+      const tempObject = new Object3D();
+      const tempVec3 = new Vector3();
+      const tempColor = new Color();
+
+      const StarGeometry = () => {
+        const shape = useMemo(() => {
+          const s = new Shape();
+          const points = 5;
+          const outerRadius = 1.2;
+          const innerRadius = 0.5;
+          
+          for (let i = 0; i < points * 2; i++) {
+            const angle = (i / (points * 2)) * Math.PI * 2 + Math.PI / 2; 
+            const r = i % 2 === 0 ? outerRadius : innerRadius;
+            const x = Math.cos(angle) * r;
+            const y = Math.sin(angle) * r;
+            if (i === 0) s.moveTo(x, y);
+            else s.lineTo(x, y);
+          }
+          s.closePath();
+          return s;
+        }, []);
+
+        const extrudeSettings = {
+          steps: 1,
+          depth: 0.2,
+          bevelEnabled: true,
+          bevelThickness: 0.1,
+          bevelSize: 0.1,
+          bevelSegments: 2
+        };
+
+        return <extrudeGeometry args={[shape, extrudeSettings]} />;
+      };
+
+      const generateParticles = (count, type) => {
+        const particles = [];
+        for (let i = 0; i < count; i++) {
+          const t = i / count;
+          
+          let x = 0, y = 0, z = 0;
+          let scale = 1;
+
+          if (type === 'leaf') {
+            const angle = t * Math.PI * 40; 
+            const radius = (1 - t) * 8 + Math.random() * 1.5; 
+            y = (t * 16) - 8; 
+            x = Math.cos(angle) * radius;
+            z = Math.sin(angle) * radius;
+            scale = Math.random() * 0.15 + 0.05; 
+          } else if (type === 'gem') {
+            const angle = Math.random() * Math.PI * 2;
+            const h = Math.random(); 
+            const radius = (1 - h) * 7; 
+            y = (h * 16) - 8;
+            x = Math.cos(angle) * radius;
+            z = Math.sin(angle) * radius;
+            scale = Math.random() * 0.2 + 0.1;
+          } else if (type === 'ribbon') {
+            const rotations = 3.5; 
+            const angle = t * Math.PI * 2 * rotations; 
+            
+            const radius = (1 - t) * 9 + 1; 
+            y = (t * 16) - 8;
+
+            x = Math.cos(angle) * radius;
+            z = Math.sin(angle) * radius;
+            
+            scale = 0.12;
+          }
+
+          const theta = Math.random() * Math.PI * 2;
+          const phi = Math.acos((Math.random() * 2) - 1);
+          const r = 10 + Math.random() * 10;
+          const ex = r * Math.sin(phi) * Math.cos(theta);
+          const ey = r * Math.sin(phi) * Math.sin(theta);
+          const ez = r * Math.cos(phi);
+
+          particles.push({
+            treePos: new Vector3(x, y, z),
+            explodePos: new Vector3(ex, ey, ez),
+            scale,
+            rotation: [Math.random() * Math.PI, Math.random() * Math.PI, 0]
+          });
+        }
+        return particles;
+      };
+
+      const DreamTree = ({ mode, rotationOffset, theme }) => {
+        const leavesRef = useRef(null);
+        const gemsRef = useRef(null);
+        const ribbonRef = useRef(null);
+        const groupRef = useRef(null);
+
+        const leavesData = useMemo(() => generateParticles(LEAF_COUNT, 'leaf'), []);
+        const gemsData = useMemo(() => generateParticles(GEM_COUNT, 'gem'), []);
+        const ribbonData = useMemo(() => generateParticles(RIBBON_COUNT, 'ribbon'), []);
+
+        useEffect(() => {
+          if (leavesRef.current) {
+            for (let i = 0; i < leavesData.length; i++) {
+              const isMain = Math.random() > 0.5;
+              tempColor.copy(isMain ? theme.main : theme.light);
+              leavesRef.current.setColorAt(i, tempColor);
+            }
+            if (leavesRef.current.instanceColor) leavesRef.current.instanceColor.needsUpdate = true;
+          }
+
+          if (gemsRef.current) {
+            for (let i = 0; i < gemsData.length; i++) {
+              const isAccent = Math.random() > 0.7;
+              tempColor.copy(isAccent ? theme.accent : COLORS.gem);
+              gemsRef.current.setColorAt(i, tempColor);
+            }
+            if (gemsRef.current.instanceColor) gemsRef.current.instanceColor.needsUpdate = true;
+          }
+
+          if (ribbonRef.current) {
+            for (let i = 0; i < ribbonData.length; i++) {
+              ribbonRef.current.setColorAt(i, COLORS.white);
+            }
+            if (ribbonRef.current.instanceColor) ribbonRef.current.instanceColor.needsUpdate = true;
+          }
+
+        }, [theme, leavesData, gemsData, ribbonData]);
+
+        useFrame((state, delta) => {
+          if (groupRef.current) {
+            groupRef.current.rotation.y += delta * 0.1;
+            groupRef.current.rotation.y = MathUtils.lerp(groupRef.current.rotation.y, groupRef.current.rotation.y + rotationOffset * 0.1, 0.1);
+          }
+
+          const targetFactor = mode === TreeMode.EXPLODE ? 1 : 0;
+          const currentFactor = MathUtils.lerp(
+            leavesRef.current?.userData.factor || 0, 
+            targetFactor, 
+            delta * 2
+          );
+          
+          if (leavesRef.current) leavesRef.current.userData.factor = currentFactor;
+
+          const updateInstances = (ref, data) => {
+              if (!ref.current) return;
+              const centerFactor = leavesRef.current?.userData.factor || 0;
+
+              for (let i = 0; i < data.length; i++) {
+                  const { treePos, explodePos, scale, rotation } = data[i];
+                  tempVec3.lerpVectors(treePos, explodePos, centerFactor);
+                  tempVec3.y += Math.sin(state.clock.elapsedTime + treePos.x) * 0.05;
+
+                  tempObject.position.copy(tempVec3);
+                  tempObject.rotation.set(
+                      rotation[0] + state.clock.elapsedTime * 0.2, 
+                      rotation[1] + state.clock.elapsedTime * 0.1, 
+                      rotation[2]
+                  );
+                  tempObject.scale.setScalar(scale);
+                  tempObject.updateMatrix();
+                  ref.current.setMatrixAt(i, tempObject.matrix);
+              }
+              ref.current.instanceMatrix.needsUpdate = true;
+          }
+
+          updateInstances(leavesRef, leavesData);
+          updateInstances(gemsRef, gemsData);
+          updateInstances(ribbonRef, ribbonData);
+        });
+
+        return (
+          <group ref={groupRef} position={[0, -2, 0]}>
+            <instancedMesh ref={leavesRef} args={[undefined, undefined, LEAF_COUNT]}>
+              <octahedronGeometry args={[1, 0]} />
+              <meshStandardMaterial roughness={0.4} metalness={0.6} />
+            </instancedMesh>
+
+            <instancedMesh ref={gemsRef} args={[undefined, undefined, GEM_COUNT]}>
+              <boxGeometry args={[0.5, 0.5, 0.5]} />
+              <meshStandardMaterial roughness={0.1} metalness={0.9} emissive={theme.accent} emissiveIntensity={0.5} />
+            </instancedMesh>
+
+            <instancedMesh ref={ribbonRef} args={[undefined, undefined, RIBBON_COUNT]}>
+              <tetrahedronGeometry args={[1, 0]} />
+              <meshStandardMaterial color={COLORS.white} roughness={0.1} metalness={1} emissive={COLORS.white} emissiveIntensity={2} />
+            </instancedMesh>
+
+            <mesh position={[0, 8.5, 0]}>
+              <StarGeometry />
+              <meshStandardMaterial 
+                color="#FFF" 
+                emissive={theme.accent} 
+                emissiveIntensity={2} 
+                roughness={0}
+                metalness={1}
+              />
+              <pointLight intensity={10} distance={15} color={theme.glow} />
+            </mesh>
+          </group>
+        );
+      };
+
+      // ----------------------------------------------------------------------
+      // COMPONENT: EFFECTS
+      // ----------------------------------------------------------------------
+
+      const Effects = () => {
+        return (
+          <EffectComposer disableNormalPass>
+            <Bloom 
+              luminanceThreshold={1.2} 
+              mipmapBlur 
+              intensity={1.5} 
+              radius={0.6} 
+            />
+            <Vignette 
+              eskil={false} 
+              offset={0.1} 
+              darkness={0.6} 
+            />
+          </EffectComposer>
+        );
+      };
+
+      // ----------------------------------------------------------------------
+      // COMPONENT: OVERLAY
+      // ----------------------------------------------------------------------
+
+      const Overlay = ({
+        appState,
+        onStart,
+        onGestureToggle,
+        isGestureMode,
+        isMuted,
+        onMuteToggle,
+        onMusicUpload,
+        webcamRef,
+        gestureData,
+        treeMode
+      }) => {
+        return (
+          <div className="absolute inset-0 pointer-events-none z-10 flex flex-col justify-between p-8">
+            <div className="flex justify-between items-start pointer-events-auto">
+              <div>
+                 <h1 className="text-pink-300 text-2xl font-bold tracking-widest serif">DREAMY XMAS</h1>
+                 <p className="text-white/50 text-xs mt-1 font-light tracking-wide">INTERACTIVE WEBGL EXPERIENCE</p>
+              </div>
+              <div className="flex gap-2">
+                <label className="text-white/70 hover:text-white border border-white/20 px-4 py-2 rounded-full text-xs uppercase transition-colors backdrop-blur-md bg-black/20 cursor-pointer flex items-center">
+                   <span>Change Music</span>
+                   <input 
+                     type="file" 
+                     accept="audio/*" 
+                     onChange={onMusicUpload}
+                     className="hidden" 
+                   />
+                </label>
+                <button 
+                  onClick={onMuteToggle}
+                  className="text-white/70 hover:text-white border border-white/20 px-4 py-2 rounded-full text-xs uppercase transition-colors backdrop-blur-md bg-black/20"
+                >
+                  {isMuted ? "Unmute" : "Mute"}
+                </button>
+              </div>
+            </div>
+
+            {appState === AppState.INTRO && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm pointer-events-auto">
+                <div className="text-center space-y-8 max-w-md p-8 border border-white/10 rounded-2xl bg-white/5 shadow-2xl shadow-pink-900/20">
+                  <h2 className="text-6xl text-white serif italic text-transparent bg-clip-text bg-gradient-to-r from-pink-300 to-purple-300">
+                    Dreamy
+                    <br />
+                    <span className="not-italic font-bold">Xmas</span>
+                  </h2>
+                  <div className="flex flex-col gap-4">
+                    <button 
+                      onClick={onStart}
+                      className="bg-white text-black hover:bg-pink-100 py-3 px-8 rounded-full font-bold tracking-wider transition-transform hover:scale-105"
+                    >
+                      ENTER EXPERIENCE
+                    </button>
+                    <button 
+                      onClick={() => { onGestureToggle(); onStart(); }}
+                      className="border border-pink-400/50 text-pink-200 hover:bg-pink-900/30 py-3 px-8 rounded-full font-semibold text-sm tracking-wide transition-colors"
+                    >
+                      ENTER WITH GESTURE CAM
+                    </button>
+                  </div>
+                  <p className="text-white/40 text-xs leading-relaxed">
+                    Experience requires a modern GPU.<br/>Gesture mode uses camera to detect hand movements.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {appState === AppState.EXPERIENCE && (
+              <div className="flex justify-between items-end w-full">
+                 <div className="text-white/60 text-sm">
+                    <p>Current State: <span className="text-pink-400 font-bold">{treeMode}</span></p>
+                    <p className="text-xs opacity-50 mt-1">Click anywhere to toggle or use Gestures</p>
+                 </div>
+
+                 {isGestureMode && (
+                   <div className="relative pointer-events-auto">
+                      <div className="w-48 h-36 rounded-xl overflow-hidden border-2 border-pink-500/30 shadow-lg bg-black">
+                         <video 
+                           ref={webcamRef} 
+                           autoPlay 
+                           playsInline 
+                           muted
+                           className="w-full h-full object-cover transform -scale-x-100" 
+                         />
+                      </div>
+                      {gestureData?.detected && (
+                        <div className="absolute top-2 left-2 bg-green-500/20 text-green-300 px-2 py-1 rounded text-xs backdrop-blur-md border border-green-500/30">
+                          Hand Detected
+                        </div>
+                      )}
+                      <div className="absolute -top-20 right-0 text-right text-xs text-pink-200/80 space-y-1">
+                         <p>✊ FIST: Tree</p>
+                         <p>✋ OPEN: Explode</p>
+                         <p>👋 MOVE: Rotate</p>
+                      </div>
+                   </div>
+                 )}
+              </div>
+            )}
+            
+            {isGestureMode && gestureData?.detected && (
+              <div 
+                className="fixed w-8 h-8 pointer-events-none z-50 transition-all duration-75 ease-out"
+                style={{ 
+                   left: `${gestureData.x * 100}%`, 
+                   top: `${gestureData.y * 100}%`,
+                   transform: 'translate(-50%, -50%)'
+                }}
+              >
+                <div className={`w-full h-full border-2 rounded-full transition-colors duration-300 ${gestureData.isFist ? 'border-pink-500 bg-pink-500/20 scale-75' : 'border-white bg-white/10 scale-100'}`} />
+              </div>
+            )}
+          </div>
+        );
+      };
+
+      // ----------------------------------------------------------------------
+      // COMPONENT: EXPERIENCE
+      // ----------------------------------------------------------------------
+
+      const Experience = ({ mode, onCanvasClick, gestureRotation, theme }) => {
+        return (
+          <Canvas
+            shadows
+            camera={{ position: [0, 0, 25], fov: 35 }}
+            dpr={[1, 2]} 
+            onClick={onCanvasClick}
+            className="cursor-pointer"
+          >
+            <color attach="background" args={['#050103']} />
+            
+            <ambientLight intensity={0.2} />
+            <spotLight 
+              position={[10, 20, 10]} 
+              angle={0.5} 
+              penumbra={1} 
+              intensity={20} 
+              color={theme.glow} 
+              castShadow 
+            />
+            <pointLight position={[-10, 5, -10]} intensity={5} color={theme.accent} />
+            
+            <Environment preset="city" />
+
+            <group position={[0, -2, 0]}>
+              <DreamTree mode={mode} rotationOffset={gestureRotation} theme={theme} />
+            </group>
+
+            <ContactShadows 
+              resolution={1024} 
+              scale={50} 
+              blur={2} 
+              opacity={0.5} 
+              far={10} 
+              color="#000000" 
+            />
+
+            <Effects />
+            
+            <OrbitControls 
+              enableZoom={false} 
+              enablePan={false} 
+              maxPolarAngle={Math.PI / 2 + 0.1} 
+              minPolarAngle={Math.PI / 3}
+            />
+          </Canvas>
+        );
+      };
+
+      // ----------------------------------------------------------------------
+      // APP
+      // ----------------------------------------------------------------------
+
+      const App = () => {
+        const [appState, setAppState] = useState(AppState.INTRO);
+        const [treeMode, setTreeMode] = useState(TreeMode.TREE);
+        const [currentTheme, setCurrentTheme] = useState(THEMES.PINK);
+        const [isGestureMode, setIsGestureMode] = useState(false);
+        const [isMuted, setIsMuted] = useState(false); 
+        const [gestureData, setGestureData] = useState(null);
+        const [gestureRotation, setGestureRotation] = useState(0);
+
+        const audioRef = useRef(null);
+        const videoRef = useRef(null);
+        const requestRef = useRef(0);
+
+        useEffect(() => {
+          const audio = new Audio(BG_MUSIC_URL);
+          audio.loop = true;
+          audio.volume = 0.5;
+          audioRef.current = audio;
+
+          return () => {
+             if (audio) {
+                audio.pause();
+                audio.src = "";
+             }
+          }
+        }, []);
+
+        const toggleMute = () => {
+          if (!audioRef.current) return;
+          if (isMuted) {
+            audioRef.current.play().catch(() => {});
+            setIsMuted(false);
+          } else {
+            audioRef.current.pause();
+            setIsMuted(true);
+          }
+        };
+
+        const handleMusicUpload = (event) => {
+          const file = event.target.files?.[0];
+          if (file && audioRef.current) {
+            const fileUrl = URL.createObjectURL(file);
+            audioRef.current.src = fileUrl;
+            if (!isMuted || appState === AppState.EXPERIENCE) {
+              audioRef.current.play().catch(() => {});
+              setIsMuted(false);
+            }
+          }
+        };
+
+        const handleStart = () => {
+          setAppState(AppState.EXPERIENCE);
+          if (!isMuted && audioRef.current) {
+            audioRef.current.play().catch(e => console.log("Audio autoplay blocked", e));
+          }
+        };
+
+        const changeTheme = useCallback(() => {
+          const keys = Object.keys(THEMES);
+          const randomKey = keys[Math.floor(Math.random() * keys.length)];
+          setCurrentTheme(THEMES[randomKey]);
+        }, []);
+
+        const toggleTreeMode = useCallback(() => {
+          setTreeMode(prev => {
+            if (prev === TreeMode.EXPLODE) {
+              changeTheme();
+              return TreeMode.TREE;
+            } else {
+              return TreeMode.EXPLODE;
+            }
+          });
+        }, [changeTheme]);
+
+        const gestureLoop = useCallback((time) => {
+          if (isGestureMode && videoRef.current && videoRef.current.readyState >= 2) {
+            const result = detectHands(videoRef.current, time);
+            
+            if (result && result.landmarks && result.landmarks.length > 0) {
+              const gesture = calculateGesture(result.landmarks);
+              
+              if (gesture) {
+                const cursorX = 1 - gesture.x; 
+                
+                setGestureData({ 
+                  detected: true, 
+                  isFist: gesture.isFist, 
+                  x: cursorX, 
+                  y: gesture.y 
+                });
+
+                if (gesture.isFist && treeMode !== TreeMode.TREE) {
+                   changeTheme(); 
+                   setTreeMode(TreeMode.TREE);
+                } else if (gesture.isOpen && treeMode !== TreeMode.EXPLODE) {
+                   setTreeMode(TreeMode.EXPLODE);
+                }
+
+                const rotationFactor = (cursorX - 0.5) * 2; 
+                if (Math.abs(rotationFactor) > 0.2) {
+                   setGestureRotation(rotationFactor);
+                } else {
+                   setGestureRotation(0);
+                }
+
+              }
+            } else {
+              setGestureData(prev => prev ? { ...prev, detected: false } : null);
+              setGestureRotation(0);
+            }
+          }
+          requestRef.current = requestAnimationFrame(gestureLoop);
+        }, [isGestureMode, treeMode, changeTheme]);
+
+        useEffect(() => {
+          if (isGestureMode) {
+            const startCamera = async () => {
+              try {
+                await initializeHandLandmarker();
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240 } });
+                
+                if (videoRef.current) {
+                  videoRef.current.srcObject = stream;
+                  videoRef.current.onloadedmetadata = () => {
+                      videoRef.current?.play().then(() => {
+                          requestRef.current = requestAnimationFrame(gestureLoop);
+                      }).catch(e => console.error("Video play failed", e));
+                  };
+                }
+              } catch (err) {
+                console.error("Camera init failed", err);
+                setIsGestureMode(false);
+                alert("Could not access camera. Please allow permissions.");
+              }
+            };
+            startCamera();
+          }
+          return () => {
+            if (requestRef.current) cancelAnimationFrame(requestRef.current);
+            if (videoRef.current && videoRef.current.srcObject) {
+               const stream = videoRef.current.srcObject;
+               stream.getTracks().forEach(track => track.stop());
+            }
+          };
+        }, [isGestureMode, gestureLoop]);
+
+        return (
+          <div className="w-full h-full relative">
+            <Overlay 
+              appState={appState}
+              onStart={handleStart}
+              onGestureToggle={() => setIsGestureMode(true)}
+              isGestureMode={isGestureMode}
+              isMuted={isMuted}
+              onMuteToggle={toggleMute}
+              onMusicUpload={handleMusicUpload}
+              webcamRef={videoRef}
+              gestureData={gestureData}
+              treeMode={treeMode}
+            />
+            <Experience 
+              mode={treeMode} 
+              onCanvasClick={toggleTreeMode}
+              gestureRotation={gestureRotation}
+              theme={currentTheme}
+            />
+          </div>
+        );
+      };
+
+      const rootElement = document.getElementById('root');
+      const root = ReactDOM.createRoot(rootElement);
+      root.render(
+        <React.StrictMode>
+          <App />
+        </React.StrictMode>
+      );
+    </script>
+  <script type="module" src="/index.tsx"></script>
+</body>
+</html>
